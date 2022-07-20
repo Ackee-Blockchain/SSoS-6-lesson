@@ -3,11 +3,11 @@ import { Program } from "@project-serum/anchor";
 import { createAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { PublicKey, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { Turnstile } from "../target/types/turnstile";
+import { expect } from "chai"
 const { SystemProgram } = anchor.web3;
 
 describe("turnstile", async () => {
-  // Configure the client to use the local cluster.
-  const provider = anchor.Provider.local();
+  const provider = anchor.getProvider();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.Turnstile as Program<Turnstile>;
@@ -25,22 +25,26 @@ describe("turnstile", async () => {
 
   it("Is initialized!", async () => {
 
-    await provider.connection.confirmTransaction(
-      await provider.connection.requestAirdrop(payer.publicKey, 10000000000),
-      "confirmed"
+    const tx = await provider.connection.requestAirdrop(payer.publicKey, 10000000000);
+    const { blockhash, lastValidBlockHeight } = await provider.connection.getLatestBlockhash();
+    await provider.connection.confirmTransaction({
+      blockhash,
+      lastValidBlockHeight,
+      signature: tx
+    });
+
+    // Get the PDA that is assigned authority to token account.
+    const [_pda, _nonce] = await PublicKey.findProgramAddress(
+      [mint.publicKey.toBytes()],
+      program.programId
     );
-
-        // Get the PDA that is assigned authority to token account.
-        const [_pda, _nonce] = await PublicKey.findProgramAddress(
-          [mint.publicKey.toBytes()],
-          program.programId
-        );
-
-        pda = _pda;
+    
+    pda = _pda;
 
     // Add your test here.
-    await program.rpc.initialize({
-      accounts: {
+    await program.methods
+      .initialize()
+      .accounts({
         mint: mint.publicKey,
         state: state.publicKey,
         user: payer.publicKey,
@@ -49,9 +53,9 @@ describe("turnstile", async () => {
         systemProgram: SystemProgram.programId,
         tokenProgram:TOKEN_PROGRAM_ID,
         rent: SYSVAR_RENT_PUBKEY
-      },
-      signers: [payer, mint, state],
-    });
+      })
+      .signers([payer, mint, state])
+      .rpc();
 
     let tokenMint = await program.account.state.fetch(state.publicKey);
 
@@ -69,8 +73,9 @@ describe("turnstile", async () => {
       payer.publicKey,
       );
 
-    await program.rpc.exchange({
-      accounts: {
+    await program.methods
+      .exchange()
+      .accounts({
         state: state.publicKey,
         userTokenAccount: userTokenAccount,
         user: payer.publicKey,
@@ -79,32 +84,69 @@ describe("turnstile", async () => {
         treasury: treasury.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId
-      },
-      signers: [payer],
-    });
+      })
+      .signers([payer])
+      .rpc();
   });
 
   it("Coin!", async () => {
-    await program.rpc.coin({
-      accounts: {
+    await program.methods
+      .coin()
+      .accounts({
         state: state.publicKey,
         userTokenAccount: userTokenAccount,
         user: payer.publicKey,
         mint: mint.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
-      },
-      signers: [payer],
-    });
+      })
+      .signers([payer])
+      .rpc();
+  });
+
+  it("Cannot call coin twice!", async () => {
+    try {
+      await program.methods
+        .coin()
+        .accounts({
+          state: state.publicKey,
+          userTokenAccount: userTokenAccount,
+          user: payer.publicKey,
+          mint: mint.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([payer])
+        .rpc();
+    } catch (error) {
+      return expect(error.message.indexOf("Turnstile is already unlocked")).to.gte(0);
+    }
+    throw new Error("Expected to throw!");
+  });
+
+  it("Unexpected account cannot push!", async () => {
+    try {
+      const user = anchor.web3.Keypair.generate();
+      await program.methods
+        .push()
+        .accounts({
+          state: state.publicKey,
+          user: user.publicKey,
+        })
+        .signers([user])
+        .rpc();
+    } catch (error) {
+        return expect(error.message.indexOf("Unexpected user trying to push the turnstile")).to.gte(0);
+    }
+    throw new Error("Expected to throw!");
   });
 
   it("Push!", async () => {
-
-    await program.rpc.push({
-      accounts: {
+    await program.methods
+      .push()
+      .accounts({
         state: state.publicKey,
-        user:payer.publicKey,
-      },
-      signers: [payer],
-    });
+        user: payer.publicKey,
+      })
+      .signers([payer])
+      .rpc();
   });
 });

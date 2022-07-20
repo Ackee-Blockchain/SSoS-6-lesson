@@ -6,10 +6,13 @@ use anchor_spl::token::{
     burn, initialize_mint, mint_to, Burn, InitializeMint, Mint, MintTo, Token, TokenAccount,
 };
 
+mod errors;
+
 declare_id!("4zhxHRB9y1yD7XVP7QCBWYACzqNdi1BVy3S7fZfARFUm");
 
 #[program]
 pub mod turnstile {
+    use crate::errors::TurnstileError;
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
@@ -26,6 +29,7 @@ pub mod turnstile {
         state.mint = ctx.accounts.mint.key();
         state.treasury = ctx.accounts.treasury.key();
         state.locked = true;
+        state.user = Pubkey::default();
         Ok(())
     }
 
@@ -62,6 +66,9 @@ pub mod turnstile {
 
     #[allow(unused_variables)]
     pub fn coin(ctx: Context<Coin>) -> Result<()> {
+        if !ctx.accounts.state.locked {
+            return err!(TurnstileError::AlreadyUnlocked);
+        }
         msg!(
             "Balance of UserTokenAccount:{}",
             ctx.accounts.user_token_account.amount
@@ -69,13 +76,16 @@ pub mod turnstile {
         burn(ctx.accounts.init_burn_context(), 5)?;
         let state = &mut ctx.accounts.state;
         state.locked = false;
+        state.user = ctx.accounts.user.key();
         Ok(())
     }
 
     pub fn push(ctx: Context<UpdateState>) -> Result<()> {
         let state = &mut ctx.accounts.state;
+        if state.user != ctx.accounts.user.key() {
+            return err!(TurnstileError::UnexpectedUser);
+        }
         state.locked = true;
-
         Ok(())
     }
 }
@@ -93,7 +103,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = user,
-        space = 8 + 1 + 1 + 32 + 32
+        space = 8 + std::mem::size_of::<State>()
     )]
     pub state: Account<'info, State>,
     #[account(mut)]
@@ -146,8 +156,8 @@ impl<'info> Coin<'info> {
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = Burn {
             mint: self.mint.to_account_info(),
-            to: self.user_token_account.to_account_info(),
             authority: self.user.to_account_info(),
+            from: self.user_token_account.to_account_info(),
         };
         CpiContext::new(cpi_program, cpi_accounts)
     }
@@ -179,4 +189,5 @@ pub struct State {
     pub mint: Pubkey,
     pub treasury: Pubkey,
     pub bump: u8,
+    pub user: Pubkey,
 }
